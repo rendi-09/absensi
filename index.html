@@ -45,26 +45,33 @@
             const now = new Date();
             const timeString = now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
 
-            // Simpan ke array
             attendanceData.push({ id: decodedText, waktu: timeString });
-
-            // Simpan ke memori HP (LocalStorage)
             localStorage.setItem('absensi_anggota', JSON.stringify(attendanceData));
 
-            // Beri feedback suara/getar jika didukung
             if (navigator.vibrate) navigator.vibrate(200);
             alert("Berhasil Absen: " + decodedText);
 
             updateUI();
         }
 
-        // 3. Menjalankan Kamera
-        const html5QrCode = new Html5Qrcode("reader");
-        html5QrCode.start(
-            { facingMode: "environment" }, // Pakai kamera belakang HP
-            { fps: 10, qrbox: { width: 250, height: 250 } },
-            onScanSuccess
-        ).catch(err => console.error("Gagal akses kamera: ", err));
+        // 3. Menjalankan Kamera & Menampilkan Error di Layar
+        const readerElement = document.getElementById("reader");
+        
+        // Pastikan library html5-qr-code berhasil diload
+        if (typeof Html5Qrcode === "undefined") {
+             readerElement.innerHTML = `<div style="color:red; padding: 20px; border: 1px solid red;"><b>Error:</b> Library Scanner tidak termuat. Pastikan ada koneksi internet untuk memuat library pertama kali.</div>`;
+        } else {
+            const html5QrCode = new Html5Qrcode("reader");
+            html5QrCode.start(
+                { facingMode: "environment" }, 
+                { fps: 10, qrbox: { width: 250, height: 250 } },
+                onScanSuccess
+            ).catch(err => {
+                // Tampilkan error di layar HP
+                readerElement.innerHTML = `<div style="color:red; padding: 20px; border: 1px solid red;"><b>Kamera Gagal Diakses:</b><br>${err}<br><br><i>Pastikan Anda membukanya melalui HTTPS/Localhost dan telah memberikan izin kamera di browser.</i></div>`;
+                console.error("Gagal akses kamera: ", err);
+            });
+        }
 
         // 4. Fungsi Ekspor ke Excel (CSV)
         function exportToCSV() {
@@ -91,7 +98,6 @@
             }
         }
 
-        // Jalankan UI pertama kali
         updateUI();
     </script>
 </body>
