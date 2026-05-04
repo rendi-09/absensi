@@ -3,102 +3,233 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Absensi Organisasi Offline</title>
-    <script src="https://unpkg.com/html5-qr-code"></script>
+    <title>Scanner Absensi Offline</title>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f4f4f4; }
-        #reader { width: 100%; max-width: 500px; margin: auto; background: white; border-radius: 8px; overflow: hidden; }
-        .container { margin-top: 20px; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #28a745; color: white; border: none; border-radius: 5px; margin: 10px; }
-        #result-list { text-align: left; max-height: 200px; overflow-y: auto; border-top: 1px solid #ddd; padding-top: 10px; }
-        .log-item { border-bottom: 1px solid #eee; padding: 5px 0; font-size: 14px; }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0; padding: 20px;
+            display: flex; flex-direction: column; align-items: center;
+            background-color: #f4f4f9;
+        }
+        #scanner-container {
+            width: 100%; max-width: 500px;
+            border: 2px dashed #6c63ff; padding: 15px;
+            border-radius: 10px; background: white;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+            text-align: center; box-sizing: border-box;
+        }
+        video {
+            width: 100%; border-radius: 10px; background-color: black;
+        }
+        #camera-selector {
+            width: 100%; margin: 10px 0; padding: 10px;
+            border-radius: 5px; border: 1px solid #ccc; font-size: 16px;
+        }
+        .btn {
+            padding: 10px 20px; font-size: 16px; cursor: pointer;
+            color: white; border: none; border-radius: 5px; margin: 5px;
+            width: 100%; box-sizing: border-box; font-weight: bold;
+        }
+        .btn-scan { background-color: #6c63ff; }
+        .btn-scan:hover { background-color: #5750d9; }
+        .btn-success { background-color: #28a745; margin-top: 15px;}
+        .btn-danger { background-color: #dc3545; }
+        
+        #output {
+            margin-top: 15px; padding: 10px; border: 1px solid #ccc;
+            background: #e8f5e9; border-radius: 5px; text-align: center;
+            font-weight: bold; color: #2e7d32; display: none;
+        }
+        #result-list {
+            text-align: left; max-height: 200px; overflow-y: auto;
+            border-top: 1px solid #ddd; padding-top: 10px; margin-top: 15px;
+            width: 100%; max-width: 500px;
+        }
+        .log-item { border-bottom: 1px solid #eee; padding: 8px 0; font-size: 14px; }
     </style>
 </head>
 <body>
 
-    <h2>Scan Absensi Anggota</h2>
-    
-    <div id="reader"></div>
+    <h2>Absensi Organisasi</h2>
 
-    <div class="container">
-        <button onclick="exportToCSV()">Download Data (CSV)</button>
-        <button onclick="clearData()" style="background: #dc3545;">Hapus Semua Data</button>
+    <div id="scanner-container">
+        <!-- Pilihan Kamera dari Kode Anda -->
+        <select id="camera-selector"></select>
         
-        <h3>Riwayat Absen Lokal:</h3>
+        <video id="qr-video" playsinline autoplay muted></video>
+        
+        <button id="scan-button" class="btn btn-scan">Mulai Scan Otomatis</button>
+        <button id="stop-button" class="btn btn-danger" style="display:none;">Hentikan Kamera</button>
+        
+        <div id="output"><p id="output-text"></p></div>
+    </div>
+
+    <!-- Area Tabel Absensi -->
+    <div style="width: 100%; max-width: 500px;">
+        <button onclick="exportToCSV()" class="btn btn-success">⬇️ Download Data CSV</button>
+        <button onclick="clearData()" class="btn btn-danger" style="margin-top: 5px;">🗑️ Hapus Riwayat</button>
+        
+        <h3>Riwayat Absen:</h3>
         <div id="result-list"></div>
     </div>
 
     <script>
-        // 1. Inisialisasi Database Lokal (LocalStorage)
+        // --- INISIALISASI ---
+        const videoElement = document.getElementById('qr-video');
+        const cameraSelector = document.getElementById('camera-selector');
+        const scanButton = document.getElementById('scan-button');
+        const stopButton = document.getElementById('stop-button');
+        const outputBox = document.getElementById('output');
+        const outputText = document.getElementById('output-text');
+        
+        let currentStream = null;
+        let isScanning = false;
+        let lastScanned = "";
         let attendanceData = JSON.parse(localStorage.getItem('absensi_anggota')) || [];
+
+        // Update UI Tabel saat pertama buka
+        updateUI();
+
+        // --- 1. MENDAPATKAN DAFTAR KAMERA (Dari Kode Anda) ---
+        navigator.mediaDevices.enumerateDevices().then(devices => {
+            const videoDevices = devices.filter(device => device.kind === 'videoinput');
+            if (videoDevices.length > 0) {
+                videoDevices.forEach((device, index) => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.textContent = device.label || `Kamera ${index + 1}`;
+                    cameraSelector.appendChild(option);
+                });
+            } else {
+                alert("Tidak ada kamera yang terdeteksi!");
+            }
+        }).catch(err => {
+            console.error('Error fetching devices:', err);
+        });
+
+        // Ganti kamera jika dropdown diubah
+        cameraSelector.addEventListener('change', () => {
+            if (isScanning) startCamera(cameraSelector.value);
+        });
+
+        // --- 2. MENYALAKAN KAMERA ---
+        function startCamera(cameraId) {
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+
+            navigator.mediaDevices.getUserMedia({ video: { deviceId: cameraId ? { exact: cameraId } : undefined, facingMode: "environment" } })
+                .then(stream => {
+                    currentStream = stream;
+                    videoElement.srcObject = stream;
+                    videoElement.play();
+                    isScanning = true;
+                    
+                    scanButton.style.display = "none";
+                    stopButton.style.display = "block";
+                    
+                    // Mulai pemindaian offline
+                    scanOffline();
+                })
+                .catch(err => {
+                    alert('Gagal akses kamera: ' + err.message + '\n\nPastikan Anda mengizinkan akses kamera dan membuka file ini lewat HTTPS/Server.');
+                });
+        }
+
+        function stopCamera() {
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+                videoElement.srcObject = null;
+            }
+            isScanning = false;
+            scanButton.style.display = "block";
+            stopButton.style.display = "none";
+        }
+
+        // --- 3. PEMINDAI OFFLINE (Menggantikan API qrserver) ---
+        async function scanOffline() {
+            if (!isScanning) return;
+
+            // Menggunakan BarcodeDetector bawaan browser (Offline)
+            if ("BarcodeDetector" in window) {
+                const barcodeDetector = new BarcodeDetector({ formats: ["qr_code", "ean_13", "code_128"] });
+                
+                try {
+                    const barcodes = await barcodeDetector.detect(videoElement);
+                    if (barcodes.length > 0) {
+                        const hasil = barcodes[0].rawValue;
+                        
+                        // Cek agar tidak scan dobel dalam 3 detik
+                        if (hasil !== lastScanned) {
+                            lastScanned = hasil;
+                            simpanKeDatabase(hasil);
+                            setTimeout(() => { lastScanned = ""; }, 3000);
+                        }
+                    }
+                } catch (e) { /* Abaikan error frame */ }
+            } else {
+                alert("Maaf, browser ini belum mendukung pemindai offline bawaan.");
+                stopCamera();
+                return;
+            }
+
+            // Looping terus menerus selama kamera menyala
+            requestAnimationFrame(scanOffline);
+        }
+
+        // --- 4. PENYIMPANAN DATA (LocalStorage) ---
+        function simpanKeDatabase(idData) {
+            const now = new Date();
+            const timeString = now.toLocaleDateString('id-ID') + ' ' + now.toLocaleTimeString('id-ID');
+            
+            attendanceData.push({ id: idData, waktu: timeString });
+            localStorage.setItem('absensi_anggota', JSON.stringify(attendanceData));
+            
+            // Tampilkan Notif
+            outputBox.style.display = "block";
+            outputText.innerText = "✅ Berhasil: " + idData;
+            if (navigator.vibrate) navigator.vibrate(200);
+            
+            updateUI();
+        }
 
         function updateUI() {
             const list = document.getElementById('result-list');
             list.innerHTML = '';
-            attendanceData.forEach((item, index) => {
-                list.innerHTML += `<div class="log-item">${index + 1}. <b>${item.id}</b> - ${item.waktu}</div>`;
+            [...attendanceData].reverse().forEach((item, index) => {
+                list.innerHTML += `<div class="log-item"><b>${item.id}</b> <br><small style="color:#888;">${item.waktu}</small></div>`;
             });
         }
 
-        // 2. Fungsi saat Barcode Berhasil di-Scan
-        function onScanSuccess(decodedText, decodedResult) {
-            const now = new Date();
-            const timeString = now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
-
-            attendanceData.push({ id: decodedText, waktu: timeString });
-            localStorage.setItem('absensi_anggota', JSON.stringify(attendanceData));
-
-            if (navigator.vibrate) navigator.vibrate(200);
-            alert("Berhasil Absen: " + decodedText);
-
-            updateUI();
-        }
-
-        // 3. Menjalankan Kamera & Menampilkan Error di Layar
-        const readerElement = document.getElementById("reader");
-        
-        // Pastikan library html5-qr-code berhasil diload
-        if (typeof Html5Qrcode === "undefined") {
-             readerElement.innerHTML = `<div style="color:red; padding: 20px; border: 1px solid red;"><b>Error:</b> Library Scanner tidak termuat. Pastikan ada koneksi internet untuk memuat library pertama kali.</div>`;
-        } else {
-            const html5QrCode = new Html5Qrcode("reader");
-            html5QrCode.start(
-                { facingMode: "environment" }, 
-                { fps: 10, qrbox: { width: 250, height: 250 } },
-                onScanSuccess
-            ).catch(err => {
-                // Tampilkan error di layar HP
-                readerElement.innerHTML = `<div style="color:red; padding: 20px; border: 1px solid red;"><b>Kamera Gagal Diakses:</b><br>${err}<br><br><i>Pastikan Anda membukanya melalui HTTPS/Localhost dan telah memberikan izin kamera di browser.</i></div>`;
-                console.error("Gagal akses kamera: ", err);
-            });
-        }
-
-        // 4. Fungsi Ekspor ke Excel (CSV)
+        // --- 5. EKSPOR KE EXCEL ---
         function exportToCSV() {
-            if (attendanceData.length === 0) return alert("Data masih kosong!");
-            
+            if (attendanceData.length === 0) return alert("Belum ada data!");
             let csvContent = "data:text/csv;charset=utf-8,ID Anggota,Waktu Absen\n";
-            attendanceData.forEach(row => {
-                csvContent += `${row.id},${row.waktu}\n`;
-            });
-
+            attendanceData.forEach(row => { csvContent += `${row.id},${row.waktu}\n`; });
             const encodedUri = encodeURI(csvContent);
             const link = document.createElement("a");
             link.setAttribute("href", encodedUri);
-            link.setAttribute("download", "data_absensi.csv");
+            link.setAttribute("download", "Data_Absensi.csv");
             document.body.appendChild(link);
             link.click();
         }
 
         function clearData() {
-            if(confirm("Hapus semua data absensi di HP ini?")) {
+            if(confirm("Hapus semua riwayat absensi?")) {
                 localStorage.removeItem('absensi_anggota');
                 attendanceData = [];
+                outputBox.style.display = "none";
                 updateUI();
             }
         }
 
-        updateUI();
+        // Event Listeners
+        scanButton.addEventListener('click', () => startCamera(cameraSelector.value));
+        stopButton.addEventListener('click', stopCamera);
+        
+        // Matikan kamera jika user menutup tab
+        window.addEventListener('beforeunload', stopCamera);
+
     </script>
 </body>
 </html>
