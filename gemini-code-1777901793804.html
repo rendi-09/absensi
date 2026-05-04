@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Absensi Organisasi Offline</title>
+    <script src="https://unpkg.com/html5-qr-code"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; background: #f4f4f4; }
+        #reader { width: 100%; max-width: 500px; margin: auto; background: white; border-radius: 8px; overflow: hidden; }
+        .container { margin-top: 20px; background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; background: #28a745; color: white; border: none; border-radius: 5px; margin: 10px; }
+        #result-list { text-align: left; max-height: 200px; overflow-y: auto; border-top: 1px solid #ddd; padding-top: 10px; }
+        .log-item { border-bottom: 1px solid #eee; padding: 5px 0; font-size: 14px; }
+    </style>
+</head>
+<body>
+
+    <h2>Scan Absensi Anggota</h2>
+    
+    <div id="reader"></div>
+
+    <div class="container">
+        <button onclick="exportToCSV()">Download Data (CSV)</button>
+        <button onclick="clearData()" style="background: #dc3545;">Hapus Semua Data</button>
+        
+        <h3>Riwayat Absen Lokal:</h3>
+        <div id="result-list"></div>
+    </div>
+
+    <script>
+        // 1. Inisialisasi Database Lokal (LocalStorage)
+        let attendanceData = JSON.parse(localStorage.getItem('absensi_anggota')) || [];
+
+        function updateUI() {
+            const list = document.getElementById('result-list');
+            list.innerHTML = '';
+            attendanceData.forEach((item, index) => {
+                list.innerHTML += `<div class="log-item">${index + 1}. <b>${item.id}</b> - ${item.waktu}</div>`;
+            });
+        }
+
+        // 2. Fungsi saat Barcode Berhasil di-Scan
+        function onScanSuccess(decodedText, decodedResult) {
+            const now = new Date();
+            const timeString = now.toLocaleDateString() + ' ' + now.toLocaleTimeString();
+
+            // Simpan ke array
+            attendanceData.push({ id: decodedText, waktu: timeString });
+
+            // Simpan ke memori HP (LocalStorage)
+            localStorage.setItem('absensi_anggota', JSON.stringify(attendanceData));
+
+            // Beri feedback suara/getar jika didukung
+            if (navigator.vibrate) navigator.vibrate(200);
+            alert("Berhasil Absen: " + decodedText);
+
+            updateUI();
+        }
+
+        // 3. Menjalankan Kamera
+        const html5QrCode = new Html5Qrcode("reader");
+        html5QrCode.start(
+            { facingMode: "environment" }, // Pakai kamera belakang HP
+            { fps: 10, qrbox: { width: 250, height: 250 } },
+            onScanSuccess
+        ).catch(err => console.error("Gagal akses kamera: ", err));
+
+        // 4. Fungsi Ekspor ke Excel (CSV)
+        function exportToCSV() {
+            if (attendanceData.length === 0) return alert("Data masih kosong!");
+            
+            let csvContent = "data:text/csv;charset=utf-8,ID Anggota,Waktu Absen\n";
+            attendanceData.forEach(row => {
+                csvContent += `${row.id},${row.waktu}\n`;
+            });
+
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", "data_absensi.csv");
+            document.body.appendChild(link);
+            link.click();
+        }
+
+        function clearData() {
+            if(confirm("Hapus semua data absensi di HP ini?")) {
+                localStorage.removeItem('absensi_anggota');
+                attendanceData = [];
+                updateUI();
+            }
+        }
+
+        // Jalankan UI pertama kali
+        updateUI();
+    </script>
+</body>
+</html>
